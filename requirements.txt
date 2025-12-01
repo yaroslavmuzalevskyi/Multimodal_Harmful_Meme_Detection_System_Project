@@ -1,0 +1,12 @@
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.40.0
+datasets>=2.18.0
+streamlit>=1.36.0
+Pillow>=10.0.0
+tqdm>=4.66.0
+numpy>=1.26.0
+requests>=2.32.0 
+easyocr
+opencv-python-headless
+python-dotenv>=1.0.0
