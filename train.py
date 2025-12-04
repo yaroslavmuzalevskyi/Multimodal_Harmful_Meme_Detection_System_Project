@@ -150,3 +150,155 @@ def prepare_dataloaders():
     print("Dataset preprocessing finished.")
 
     print("Building dataloaders...")
+
+
+    base_columns = ["input_ids", "attention_mask", "pixel_values", "label"]
+
+    if "train" in dataset:
+        dataset["train"].set_format(type="torch", columns=base_columns)
+
+    val_split_name = "validation" if "validation" in dataset else "dev"
+    if val_split_name in dataset:
+        dataset[val_split_name].set_format(type="torch", columns=base_columns)
+
+    test_loader = None
+    if "test" in dataset:
+        test_cols = [c for c in base_columns if c in dataset["test"].column_names]
+        dataset["test"].set_format(type="torch", columns=test_cols)
+
+    train_loader = DataLoader(
+        dataset["train"], batch_size=BATCH_SIZE, shuffle=True
+    )
+
+    val_loader = DataLoader(
+        dataset[val_split_name], batch_size=BATCH_SIZE, shuffle=False
+    )
+
+    if "test" in dataset:
+        test_loader = DataLoader(
+            dataset["test"], batch_size=BATCH_SIZE, shuffle=False
+        )
+
+    num_labels = 1
+
+    print("Dataloaders ready.")
+    return train_loader, val_loader, test_loader, num_labels
+
+
+def move_batch_to_device(batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+
+    return {
+        key: value.to(DEVICE) if isinstance(value, torch.Tensor) else value
+        for key, value in batch.items()
+    }
+
+
+def run_one_epoch(
+    model: MultimodalHatefulMemeModel,
+    dataloader: DataLoader,
+    optimizer,
+    scheduler,
+    criterion,
+) -> float:
+
+    model.train()
+    running_loss = 0.0
+
+    for batch in dataloader:
+        batch = move_batch_to_device(batch)
+        labels = batch["label"].float().unsqueeze(-1)
+
+        optimizer.zero_grad()
+        logits = model(
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            pixel_values=batch["pixel_values"],
+        )
+        loss = criterion(logits, labels)
+        loss.backward()
+        clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+
+        if scheduler is not None:
+            scheduler.step()
+
+        running_loss += loss.item()
+
+    return running_loss / max(1, len(dataloader))
+
+
+@torch.no_grad()
+def evaluate(
+    model: MultimodalHatefulMemeModel,
+    dataloader: DataLoader,
+    criterion,
+) -> Tuple[float, float]:
+
+    model.eval()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+
+    for batch in dataloader:
+        batch = move_batch_to_device(batch)
+        labels = batch["label"].float().unsqueeze(-1)
+        logits = model(
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            pixel_values=batch["pixel_values"],
+        )
+        loss = criterion(logits, labels)
+        running_loss += loss.item()
+
+        probs = torch.sigmoid(logits)
+        preds = (probs >= 0.5).long()
+        correct += (preds.squeeze(-1) == labels.long().squeeze(-1)).sum().item()
+        total += labels.size(0)
+
+    avg_loss = running_loss / max(1, len(dataloader))
+    accuracy = correct / total if total > 0 else 0.0
+    return avg_loss, accuracy
+
+
+def train():
+
+    print("Preparing dataloaders...")
+    train_loader, val_loader, _, _ = prepare_dataloaders()
+    print("Dataloaders prepared. Initializing model...")
+
+    model = MultimodalHatefulMemeModel().to(DEVICE)
+    optimizer = AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    total_steps = len(train_loader) * NUM_EPOCHS
+    warmup_steps = int(total_steps * WARMUP_RATIO)
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps
+    )
+    criterion = torch.nn.BCEWithLogitsLoss()
+
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    best_val_loss = float("inf")
+
+    for epoch in range(1, NUM_EPOCHS + 1):
+        print(f"Starting epoch {epoch}/{NUM_EPOCHS}...")
+        train_loss = run_one_epoch(
+            model, train_loader, optimizer, scheduler, criterion
+        )
+        val_loss, val_acc = evaluate(model, val_loader, criterion)
+
+        print(
+            f"Epoch {epoch}/{NUM_EPOCHS} "
+            f"- train_loss: {train_loss:.4f} "
+            f"- val_loss: {val_loss:.4f} "
+            f"- val_acc: {val_acc:.4f}"
+        )
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), BEST_MODEL_PATH)
+            print(f"Saved new best model to {BEST_MODEL_PATH}")
+        print(f"Epoch {epoch} completed.\n")
+
+
+if __name__ == "__main__":
+    print("Starting training pipeline...")
+    train()
