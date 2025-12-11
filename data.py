@@ -36,7 +36,7 @@ CLASSIFIER_HIDDEN_DIM = int(os.getenv("CLASSIFIER_HIDDEN_DIM", "256") or "256")
 FREEZE_BASE_MODELS = _env_bool("FREEZE_BASE_MODELS", False)
 
 
-SEED = 42
+SEED = 40
 
 CHECKPOINT_DIR = "checkpoints"
 BEST_MODEL_PATH = f"{CHECKPOINT_DIR}/best_model.pt"
